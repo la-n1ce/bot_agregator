@@ -4,25 +4,56 @@ import music
 from discord.ext import commands
 import random
 
+from youtube_dl import YoutubeDL
+
 import requests
 from bs4 import BeautifulSoup
+
+import threading
+import logging
+import time
 
 import json
 
 
-bot = commands.Bot(command_prefix='.!.')
+songs_list = []
 
-@bot.event
+YDL_OPTIONS = {'format': 'worstaudio/best', 'noplaylist': 'False', 'simulate': 'True',
+               'preferredquality': '192', 'preferredcodec': 'mp3', 'key': 'FFmpegExtractAudio'}
+FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+
+client = commands.Bot(command_prefix=".!.")
+print(client.get_user(id))
+
+def thread_function():
+    while True:
+        print(songs_list)
+        if len(songs_list) > 0 and songs_list[0][2]:
+            if songs_list[0][0].message.guild.voice_client != None and len(songs_list) > 1 and not songs_list[0][0].message.guild.voice_client.is_playing():
+                url = play_mus(songs_list[0][0], songs_list[1])
+                songs_list.remove(songs_list[1])
+                songs_list[0][1].play(discord.FFmpegPCMAudio(executable="bin\\ffmpeg.exe", source=url, **FFMPEG_OPTIONS))
+
+            if songs_list[0][1] == None:
+                for i in range(len(songs_list) - 1):
+                    songs_list.remove(songs_list[1])
+        time.sleep(1)
+
+
+x = threading.Thread(target=thread_function)
+
+
+@client.event
 async def on_ready():
-    print('We have logged in as {0.user}'.format(bot))
+    print('We have logged in as {0.user}'.format(client))
 
 
-@bot.command(pass_context=True)
+@client.command(pass_context=True)
 async def test(ctx, arg):
     await ctx.send(arg)
 
 
-@bot.command()
+@client.command()
 async def link_to_mus(ctx, *args):
     #url = 'https://genius.com/Mentaldora-dorafool-lyrics'
     #url = 'https://genius.com/Serega-pirat-dahak-hymn-lyrics'
@@ -47,29 +78,7 @@ async def link_to_mus(ctx, *args):
     await ctx.send(f'```{text}```')
 
 
-@bot.command()
-async def name_to_mus(ctx, *msg):
-    url_to_site = f"https://genius.com/search?q={'%20'.join(['гимн', 'дахака'])}"
-    page_site = requests.get(url_to_site)
-    soup_site = BeautifulSoup(page_site.text, "html.parser")
-    result_site = soup_site.select("body > routable-page > ng-outlet > search-results-page > div > div.column_layout > div.column_layout-column_span.column_layout-column_span--primary > div:nth-child(1) > search-result-section > div > div:nth-child(2) > search-result-items > div > search-result-item > div > mini-song-card > a")
-
-
-    page = requests.get(url)
-    soup = BeautifulSoup(page.text, 'html.parser')
-    result_mus = soup.select("#lyrics-root > div:nth-child(2)")
-    text = result_mus[0].get_text("\n")
-    name_mus = (((text.split('\n'))[0].split("«"))[1].split("»"))[0]
-    print(name_mus)
-
-    if name_mus.lower() not in music.musics:
-        music.musics[name_mus.lower()] = f'```{text}```'
-
-    await ctx.send(f'```{text}```')
-
-
-
-@bot.command(pass_context=True)
+@client.command(pass_context=True)
 async def give_mus(ctx, *args):
     author_mus, mus = " ".join(args).split(", ")
 
@@ -90,7 +99,7 @@ async def give_mus(ctx, *args):
 
 
 # clear
-@bot.command()
+@client.command()
 @commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount=1):
     if amount != 0:
@@ -106,7 +115,7 @@ async def mute_error(ctx, error):
 
 
 # kick
-@bot.command()
+@client.command()
 @commands.has_permissions(kick_members=True)
 async def kick(ctx, member: discord.Member, *, reason="None"):
     await ctx.channel.purge(limit=1)
@@ -125,7 +134,7 @@ async def mute_error(ctx, error):
 
 
 #lot
-@bot.command()
+@client.command()
 async def lot(ctx):
     lot = ''
     for i in range(0, 5):
@@ -138,4 +147,97 @@ async def lot(ctx):
     await ctx.send(lot)
 
 
-bot.run(TOKEN)
+def play_mus(ctx, arg):
+    with YoutubeDL(YDL_OPTIONS) as ydl:
+        if 'https://' in arg:
+            info = ydl.extract_info(arg, download=False)
+        else:
+            info = ydl.extract_info(f"ytsearch:{arg}", download=False)['entries'][0]
+
+    url = info['formats'][0]['url']
+    return url
+
+
+@client.command(pass_context=True)
+async def play(ctx, *, arg):
+    vc, url = None, None
+    server = ctx.message.guild
+    voice_channel = server.voice_client
+    print(voice_channel)
+
+    if voice_channel is not None and voice_channel.is_playing():
+        songs_list.append(arg)
+        print(songs_list)
+    else:
+        if voice_channel is not None and not voice_channel.is_playing():
+            vc = songs_list[0][1]
+            url = play_mus(ctx, arg)
+        else:
+            vc = await ctx.message.author.voice.channel.connect()
+            songs_list.append([ctx, vc, True])
+            url = play_mus(ctx, arg)
+
+        print(1)
+        vc.play(discord.FFmpegPCMAudio(executable="bin\\ffmpeg.exe", source=url, **FFMPEG_OPTIONS))
+
+
+@client.command(name='pause', help='This command pauses the song')
+async def pause(ctx):
+    songs_list[0][2] = False
+    if ctx.message.guild.voice_client != None:
+        server = ctx.message.guild
+        voice_channel = server.voice_client
+
+        voice_channel.pause()
+    else:
+        await ctx.send("Ты че бота кикнул не играй с ошибками!")
+
+
+@client.command(name='resume', help='This command resumes the song!')
+async def resume(ctx):
+    songs_list[0][2] = True
+    if ctx.message.guild.voice_client != None:
+        server = ctx.message.guild
+        voice_channel = server.voice_client
+
+        voice_channel.resume()
+    else:
+        await ctx.send("Ты че бота кикнул не играй с ошибками!")
+
+
+@client.command(name='stop', help='This command stops the song!')
+async def stop(ctx):
+    for i in range(len(songs_list) - 1):
+        songs_list.remove(songs_list[1])
+
+    if ctx.message.guild.voice_client != None:
+        server = ctx.message.guild
+        voice_channel = server.voice_client
+
+        voice_channel.stop()
+    else:
+        await ctx.send("Ты че бота кикнул не играй с ошибками!")
+
+
+
+@client.command(name='next', help='This command skip music!')
+async def next(ctx):
+    if ctx.message.guild.voice_client != None:
+        server = ctx.message.guild
+        voice_channel = server.voice_client
+
+        voice_channel.stop()
+    else:
+        await ctx.send("Ты че бота кикнул не играй с ошибками!")
+
+
+@client.command(name='leave', help='This command leave from channel!')
+async def leave(ctx):
+    if ctx.message.guild.voice_client != None:
+        await ctx.message.guild.voice_client.disconnect()
+    else:
+        await ctx.send("Ты че бота кикнул не играй с ошибками!")
+
+
+x.start()
+client.run(TOKEN)
